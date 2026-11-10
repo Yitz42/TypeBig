@@ -14,8 +14,9 @@ Good for showing a message across a room, holding up a sign on a phone or tablet
 - **Sans / Serif / Mono** changes the font.
 - **Clear** (or press `Esc` twice) wipes the text.
 - Press `Enter` for a new line.
-- The controls hide while you type. Move the mouse to bring them back.
-- Your text, colors and font are remembered in your browser.
+- **Pictures:** paste one (`Ctrl/⌘ + V`) or drag one onto the page. A picture alone fills the screen; mixed with words, it shrinks along with the text. Delete it with Backspace like any letter.
+- The controls hide while you type or after a moment of not moving the mouse. Move the mouse to bring them back.
+- Your text, pictures, colors and font are remembered in your browser. (Very large pictures may be too big to remember; the words are always kept.)
 
 ### Link straight to a message
 

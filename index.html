@@ -76,6 +76,18 @@
   }
   /* If even the smallest size can't fit a single long word, let it break. */
   #text.break { overflow-wrap: anywhere; }
+  /* Pictures are sized in em, so they grow and shrink together with the text. */
+  #text img {
+    height: 2.5em;
+    width: auto;
+    max-width: none;
+    vertical-align: middle;
+    margin: 0.04em;
+    border-radius: 0.06em;
+  }
+  /* A picture on its own line gets a full-height slot so it can fill the screen. */
+  #text img.solo { height: 4em; }
+  body.dragging #stage { outline: 4px dashed var(--muted); outline-offset: -16px; }
   #text:empty::before {
     content: attr(data-placeholder);
     color: var(--muted);
@@ -127,7 +139,7 @@
   <main id="stage">
     <div id="text" contenteditable="plaintext-only" spellcheck="false" autocapitalize="sentences"
          role="textbox" aria-multiline="true" aria-label="Type your text"
-         data-placeholder="Start typing…"></div>
+         data-placeholder="Start typing or paste a picture…"></div>
   </main>
 
   <nav id="bar" aria-label="TypeBig controls">
@@ -152,16 +164,183 @@
   const MIN = 10;     // smallest font size in px
   const store = {
     get(k) { try { return localStorage.getItem('typebig:' + k); } catch { return null; } },
-    set(k, v) { try { localStorage.setItem('typebig:' + k, v); } catch {} }
+    set(k, v) { try { localStorage.setItem('typebig:' + k, v); return true; } catch { return false; } }
   };
 
   // Firefox < 136 doesn't support plaintext-only; fall back and strip formatting on paste.
   if (text.contentEditable !== 'plaintext-only') text.contentEditable = 'true';
   text.addEventListener('paste', (e) => {
     e.preventDefault();
-    const t = (e.clipboardData || window.clipboardData).getData('text/plain');
-    document.execCommand('insertText', false, t);
+    const data = e.clipboardData || window.clipboardData;
+    const images = imageFiles(data);
+    if (images.length) {
+      insertImages(images);
+    } else {
+      document.execCommand('insertText', false, data.getData('text/plain'));
+    }
   });
+
+  // ---- Pictures -----------------------------------------------------------
+  const MAX_PX = 2000;   // pictures are downscaled to this size so they can be saved
+
+  function imageFiles(data) {
+    if (!data) return [];
+    const files = [...(data.files || [])].filter(f => f.type.startsWith('image/'));
+    if (files.length) return files;
+    return [...(data.items || [])]
+      .filter(i => i.kind === 'file' && i.type.startsWith('image/'))
+      .map(i => i.getAsFile()).filter(Boolean);
+  }
+
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  async function fileToDataURL(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await loadImage(url);
+      const scale = Math.min(1, MAX_PX / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      // Keep PNG/GIF/WebP as PNG for transparency; photos become JPEG to stay small.
+      return file.type === 'image/jpeg'
+        ? canvas.toDataURL('image/jpeg', 0.9)
+        : canvas.toDataURL('image/png');
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  function makeImg(src) {
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = 'Pasted picture';
+    img.draggable = false;
+    img.addEventListener('load', fit);
+    return img;
+  }
+
+  async function insertImages(files, range) {
+    const sources = await Promise.all(files.map(fileToDataURL).map(p => p.catch(() => null)));
+    const sel = window.getSelection();
+    if (!range) {
+      range = sel.rangeCount && text.contains(sel.getRangeAt(0).commonAncestorContainer)
+        ? sel.getRangeAt(0)
+        : endRange();
+    }
+    range.deleteContents();
+    for (const src of sources.filter(Boolean)) {
+      const img = makeImg(src);
+      range.insertNode(img);
+      range.setStartAfter(img);
+      range.collapse(true);
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+    text.focus();
+    changed();
+  }
+
+  // Drag and drop pictures onto the page
+  let dragDepth = 0;
+  window.addEventListener('dragenter', (e) => {
+    if ([...(e.dataTransfer?.types || [])].includes('Files')) {
+      dragDepth++;
+      document.body.classList.add('dragging');
+    }
+  });
+  window.addEventListener('dragleave', () => {
+    if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); }
+  });
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove('dragging');
+    const files = imageFiles(e.dataTransfer);
+    if (!files.length) return;
+    let range = null;
+    if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(e.clientX, e.clientY);
+    else if (document.caretPositionFromPoint) {
+      const p = document.caretPositionFromPoint(e.clientX, e.clientY);
+      if (p) { range = document.createRange(); range.setStart(p.offsetNode, p.offset); }
+    }
+    if (range && !text.contains(range.startContainer)) range = null;
+    insertImages(files, range);
+  });
+
+  // A picture alone on its line gets taller, so a single picture fills the screen.
+  function markSoloImages() {
+    const lines = serialize().reduce((acc, part) => {
+      if (part.img) acc[acc.length - 1].push('img');
+      else part.t.split('\n').forEach((s, i) => { if (i) acc.push([]); if (s.trim()) acc[acc.length - 1].push('t'); });
+      return acc;
+    }, [[]]);
+    const imgs = text.querySelectorAll('img');
+    let n = 0;
+    for (const line of lines) {
+      const solo = line.length === 1 && line[0] === 'img';
+      for (const item of line) if (item === 'img' && imgs[n]) imgs[n++].classList.toggle('solo', solo);
+    }
+  }
+
+  // ---- Save / restore ----------------------------------------------------
+  // Content is stored as a list of {t: "text"} and {img: "data:..."} parts.
+  function serialize() {
+    const parts = [];
+    const push = (t) => {
+      const last = parts[parts.length - 1];
+      if (last && 't' in last) last.t += t; else parts.push({ t });
+    };
+    (function walk(node) {
+      for (const n of node.childNodes) {
+        if (n.nodeType === 3) push(n.nodeValue);
+        else if (n.nodeName === 'BR') push('\n');
+        else if (n.nodeName === 'IMG') parts.push({ img: n.src });
+        else {
+          if (/^(DIV|P)$/.test(n.nodeName) && parts.length) push('\n');
+          walk(n);
+        }
+      }
+    })(text);
+    return parts;
+  }
+
+  function restore(parts) {
+    text.textContent = '';
+    for (const p of parts) {
+      if (typeof p.t === 'string') text.append(p.t);
+      else if (typeof p.img === 'string' && p.img.startsWith('data:image/')) text.append(makeImg(p.img));
+    }
+  }
+
+  let saveTimer;
+  function save() {
+    const parts = serialize();
+    if (!store.set('content', JSON.stringify(parts))) {
+      // Too big for browser storage: keep the words, drop the pictures.
+      store.set('content', JSON.stringify(parts.filter(p => 't' in p)));
+    }
+  }
+  let dirty = false;
+  function flush() { if (dirty) { clearTimeout(saveTimer); dirty = false; save(); } }
+  window.addEventListener('pagehide', flush);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+  function changed() {
+    dirty = true;
+    markSoloImages();
+    fit();
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flush, 300);
+  }
 
   // ---- Fit text to screen -------------------------------------------------
   function fits() {
@@ -172,7 +351,7 @@
 
   function fit() {
     // Treat a lone <br> (left behind by contenteditable) as empty so the placeholder shows.
-    if (text.textContent === '' && text.innerHTML !== '') text.innerHTML = '';
+    if (text.textContent === '' && text.innerHTML !== '' && !text.querySelector('img')) text.innerHTML = '';
 
     text.classList.remove('break');
     const maxSize = Math.max(stage.clientWidth, stage.clientHeight);
@@ -195,17 +374,18 @@
   function showBar() {
     document.body.classList.remove('typing');
     clearTimeout(idleTimer);
+    // Hide again after a short idle, unless the pointer is resting on the bar.
+    idleTimer = setTimeout(() => {
+      if (!document.getElementById('bar').matches(':hover')) hideBarSoon();
+    }, 2500);
   }
   function hideBarSoon() {
     document.body.classList.add('typing');
   }
 
-  let saveTimer;
   text.addEventListener('input', () => {
-    fit();
+    changed();
     hideBarSoon();
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => store.set('text', text.textContent), 300);
   });
   window.addEventListener('mousemove', showBar, { passive: true });
   window.addEventListener('touchstart', (e) => { if (!stage.contains(e.target)) showBar(); }, { passive: true });
@@ -257,7 +437,7 @@
 
   function clearText() {
     text.textContent = '';
-    store.set('text', '');
+    store.set('content', '[]');
     fit();
     focusEnd();
   }
@@ -306,8 +486,16 @@
 
   // ---- Restore -----------------------------------------------------------
   const params = new URLSearchParams(location.search);
-  const initial = params.has('text') ? params.get('text') : store.get('text');
-  if (initial) text.textContent = initial;
+  if (params.has('text')) {
+    text.textContent = params.get('text');
+  } else {
+    let saved = null;
+    try { saved = JSON.parse(store.get('content')); } catch {}
+    if (Array.isArray(saved)) restore(saved);
+    else if (store.get('text')) text.textContent = store.get('text');   // older versions
+  }
+  markSoloImages();
+  showBar();
   applyTheme(params.get('theme') || store.get('theme') || 'dark');
   applyFont(params.get('font') || store.get('font') || 'sans');
   fit();
