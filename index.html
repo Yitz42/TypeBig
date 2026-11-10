@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TypeBig</title>
+<meta name="description" content="Type anything and it fills the whole screen. The more you type, the smaller it gets.">
+<meta name="theme-color" content="#0b0b0c">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0b0c'/%3E%3Ctext x='32' y='46' font-family='Arial,Helvetica,sans-serif' font-weight='800' font-size='38' text-anchor='middle' fill='%23fff'%3EAa%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0b0b0c;
+    --fg: #f5f5f2;
+    --muted: rgba(245, 245, 242, 0.38);
+    --bar-bg: rgba(30, 30, 32, 0.82);
+    --bar-fg: #f5f5f2;
+    --bar-hover: rgba(255, 255, 255, 0.12);
+    --font: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+    --weight: 800;
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfaf7;
+    --fg: #111111;
+    --muted: rgba(17, 17, 17, 0.32);
+    --bar-bg: rgba(255, 255, 255, 0.88);
+    --bar-fg: #111111;
+    --bar-hover: rgba(0, 0, 0, 0.08);
+  }
+  :root[data-theme="contrast"] {
+    --bg: #ffe600;
+    --fg: #000000;
+    --muted: rgba(0, 0, 0, 0.4);
+    --bar-bg: rgba(0, 0, 0, 0.85);
+    --bar-fg: #ffe600;
+    --bar-hover: rgba(255, 230, 0, 0.18);
+  }
+  :root[data-font="serif"] { --font: Georgia, "Times New Roman", serif; --weight: 700; }
+  :root[data-font="mono"]  { --font: ui-monospace, "SF Mono", Menlo, Consolas, monospace; --weight: 700; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    overflow: hidden;
+    transition: background-color .25s ease, color .25s ease;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: max(5vmin, env(safe-area-inset-top)) max(5vmin, env(safe-area-inset-right))
+             max(5vmin, env(safe-area-inset-bottom)) max(5vmin, env(safe-area-inset-left));
+    cursor: text;
+  }
+
+  #text {
+    width: 100%;
+    max-height: 100%;
+    margin: 0;
+    outline: none;
+    font-family: var(--font);
+    font-weight: var(--weight);
+    line-height: 1.08;
+    letter-spacing: -0.02em;
+    text-align: center;
+    white-space: pre-wrap;
+    overflow-wrap: normal;
+    word-break: normal;
+    caret-color: var(--fg);
+    font-size: 200px;
+  }
+  /* If even the smallest size can't fit a single long word, let it break. */
+  #text.break { overflow-wrap: anywhere; }
+  #text:empty::before {
+    content: attr(data-placeholder);
+    color: var(--muted);
+    pointer-events: none;
+  }
+
+  #bar {
+    position: fixed;
+    left: 50%;
+    bottom: max(16px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    display: flex;
+    gap: 4px;
+    padding: 6px;
+    border-radius: 999px;
+    background: var(--bar-bg);
+    color: var(--bar-fg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+    font: 500 14px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+    transition: opacity .35s ease, transform .35s ease;
+    z-index: 10;
+    max-width: calc(100vw - 32px);
+  }
+  body.typing #bar { opacity: 0; transform: translate(-50%, 12px); pointer-events: none; }
+  #bar button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    padding: 10px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  #bar button:hover, #bar button:focus-visible { background: var(--bar-hover); outline: none; }
+  #bar .sep { width: 1px; margin: 6px 2px; background: currentColor; opacity: .2; }
+  @media (max-width: 480px) {
+    #bar button { padding: 10px 10px; font-size: 13px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body, #bar { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <main id="stage">
+    <div id="text" contenteditable="plaintext-only" spellcheck="false" autocapitalize="sentences"
+         role="textbox" aria-multiline="true" aria-label="Type your text"
+         data-placeholder="Start typing…"></div>
+  </main>
+
+  <nav id="bar" aria-label="TypeBig controls">
+    <button id="fullscreen" type="button" title="Fullscreen (Ctrl/⌘ + Enter)">Fullscreen</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button id="theme" type="button" title="Change colors">Dark</button>
+    <button id="font" type="button" title="Change font">Sans</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button id="clear" type="button" title="Clear text (Esc twice)">Clear</button>
+  </nav>
+
+<script>
+(() => {
+  const root = document.documentElement;
+  const stage = document.getElementById('stage');
+  const text = document.getElementById('text');
+  const btnFull = document.getElementById('fullscreen');
+  const btnTheme = document.getElementById('theme');
+  const btnFont = document.getElementById('font');
+  const btnClear = document.getElementById('clear');
+
+  const MIN = 10;     // smallest font size in px
+  const store = {
+    get(k) { try { return localStorage.getItem('typebig:' + k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem('typebig:' + k, v); } catch {} }
+  };
+
+  // Firefox < 136 doesn't support plaintext-only; fall back and strip formatting on paste.
+  if (text.contentEditable !== 'plaintext-only') text.contentEditable = 'true';
+  text.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const t = (e.clipboardData || window.clipboardData).getData('text/plain');
+    document.execCommand('insertText', false, t);
+  });
+
+  // ---- Fit text to screen -------------------------------------------------
+  function fits() {
+    const cs = getComputedStyle(stage);
+    const availH = stage.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    return text.scrollHeight <= availH + 0.5 && text.scrollWidth <= text.clientWidth + 0.5;
+  }
+
+  function fit() {
+    // Treat a lone <br> (left behind by contenteditable) as empty so the placeholder shows.
+    if (text.textContent === '' && text.innerHTML !== '') text.innerHTML = '';
+
+    text.classList.remove('break');
+    const maxSize = Math.max(stage.clientWidth, stage.clientHeight);
+    let lo = MIN, hi = maxSize;
+    text.style.fontSize = hi + 'px';
+    if (!fits()) {
+      // Binary search for the largest size that fits.
+      for (let i = 0; i < 18 && hi - lo > 0.5; i++) {
+        const mid = (lo + hi) / 2;
+        text.style.fontSize = mid + 'px';
+        if (fits()) lo = mid; else hi = mid;
+      }
+      text.style.fontSize = Math.floor(lo * 2) / 2 + 'px';
+      if (!fits()) text.classList.add('break');
+    }
+  }
+
+  // ---- Typing state: hide controls while typing ---------------------------
+  let idleTimer;
+  function showBar() {
+    document.body.classList.remove('typing');
+    clearTimeout(idleTimer);
+  }
+  function hideBarSoon() {
+    document.body.classList.add('typing');
+  }
+
+  let saveTimer;
+  text.addEventListener('input', () => {
+    fit();
+    hideBarSoon();
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => store.set('text', text.textContent), 300);
+  });
+  window.addEventListener('mousemove', showBar, { passive: true });
+  window.addEventListener('touchstart', (e) => { if (!stage.contains(e.target)) showBar(); }, { passive: true });
+
+  // Clicking anywhere on the screen focuses the text and puts the caret at the end.
+  stage.addEventListener('mousedown', (e) => {
+    if (e.target === stage) {
+      e.preventDefault();
+      focusEnd();
+    }
+  });
+  function focusEnd() {
+    text.focus();
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // ---- Controls -----------------------------------------------------------
+  const themes = [['dark', 'Dark'], ['light', 'Light'], ['contrast', 'Bold']];
+  const fonts = [['sans', 'Sans'], ['serif', 'Serif'], ['mono', 'Mono']];
+
+  function applyTheme(id) {
+    const i = Math.max(0, themes.findIndex(t => t[0] === id));
+    root.dataset.theme = themes[i][0];
+    btnTheme.textContent = themes[i][1];
+    document.querySelector('meta[name="theme-color"]').content =
+      getComputedStyle(root).getPropertyValue('--bg').trim();
+    store.set('theme', themes[i][0]);
+  }
+  function applyFont(id) {
+    const i = Math.max(0, fonts.findIndex(f => f[0] === id));
+    root.dataset.font = fonts[i][0];
+    btnFont.textContent = fonts[i][1];
+    store.set('font', fonts[i][0]);
+    fit();
+  }
+  function cycle(list, current) {
+    const i = list.findIndex(x => x[0] === current);
+    return list[(i + 1) % list.length][0];
+  }
+
+  btnTheme.addEventListener('click', () => { applyTheme(cycle(themes, root.dataset.theme)); focusEnd(); });
+  btnFont.addEventListener('click', () => { applyFont(cycle(fonts, root.dataset.font)); focusEnd(); });
+  btnClear.addEventListener('click', clearText);
+
+  function clearText() {
+    text.textContent = '';
+    store.set('text', '');
+    fit();
+    focusEnd();
+  }
+
+  function toggleFullscreen() {
+    const el = document.documentElement;
+    const isFull = document.fullscreenElement || document.webkitFullscreenElement;
+    if (isFull) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) req.call(el);
+    }
+    focusEnd();
+  }
+  btnFull.addEventListener('click', toggleFullscreen);
+  function onFsChange() {
+    const isFull = document.fullscreenElement || document.webkitFullscreenElement;
+    btnFull.textContent = isFull ? 'Exit fullscreen' : 'Fullscreen';
+  }
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  if (!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)) {
+    btnFull.hidden = true;   // e.g. iPhone Safari
+    btnFull.nextElementSibling.hidden = true;
+  }
+
+  // Keyboard shortcuts
+  let lastEsc = 0;
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      toggleFullscreen();
+    } else if (e.key === 'Escape') {
+      const now = Date.now();
+      if (now - lastEsc < 500) clearText();
+      lastEsc = now;
+    } else if (document.activeElement !== text && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      focusEnd();   // start typing from anywhere
+    }
+  });
+
+  // Refit on resize / fullscreen / orientation change
+  new ResizeObserver(fit).observe(stage);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+
+  // ---- Restore -----------------------------------------------------------
+  const params = new URLSearchParams(location.search);
+  const initial = params.has('text') ? params.get('text') : store.get('text');
+  if (initial) text.textContent = initial;
+  applyTheme(params.get('theme') || store.get('theme') || 'dark');
+  applyFont(params.get('font') || store.get('font') || 'sans');
+  fit();
+  focusEnd();
+})();
+</script>
+</body>
+</html>
